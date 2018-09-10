@@ -1,0 +1,12 @@
+
+*.gz
+*.meta
+.idea/
+*.xml
+*.iml
+*.pyc
+data/
+train/
+checkpoint/
+checkpoint_backup/
+checkpoint_vgg16/
