@@ -18,6 +18,7 @@ from models import *
 from model_refactor import *
 from modified_googlenet import *
 from models import modified_resnet18
+from PIL import Image
 
 if os.name == 'nt':  # windows
     num_workers = 0
@@ -109,7 +110,6 @@ def test(log_index=-1, prune_iteration=-1):
         acc = 100. * correct / total
 
     if log_index != -1:
-        
         (inputs, targets) = list(testloader)[0]
         if use_cuda:
             inputs, targets = inputs.cuda(), targets.cuda()
@@ -336,10 +336,11 @@ class FilterPruner:
 
         return filters
 
-    def prune(self, conv_index=-1, test_accuracy=False):
+    def prune(self, conv_index=-1, test_accuracy=False, prune_layer=False):
         # Get the accuracy before pruning
         prune_iteration = 0
         acc_pre_prune = test()
+        not_stop = 1
 
         if test_accuracy:
             save(acc_pre_prune, conv_index, -1, prune_iteration)
@@ -353,8 +354,21 @@ class FilterPruner:
 
         number_of_filters = pruner.total_num_filters(conv_index)
 
-        num_filters_to_prune_per_iteration = math.ceil(number_of_filters / 16)
-        while (acc > acc_pre_prune * 0.97 and pruner.total_num_filters(conv_index) / number_of_filters > 0.1 or test_accuracy) and pruner.total_num_filters(conv_index) > num_filters_to_prune_per_iteration:
+        if prune_layer:
+            a = np.logspace(np.log10(number_of_filters), 0, 16)
+            for i in range(len(a)):
+                a[i] = round(a[i])
+            b = []
+            for i in range(len(a)):
+                if a[i] not in b:
+                    b.append(a[i])
+            num_filters_to_prune_per_iteration = int(b[prune_iteration] - b[prune_iteration+1])
+            print("b: ")
+            print(b)
+            print("filter prune: ", num_filters_to_prune_per_iteration)
+        else:
+            num_filters_to_prune_per_iteration = math.ceil(number_of_filters / 16)
+        while (not_stop or test_accuracy) and pruner.total_num_filters(conv_index) > num_filters_to_prune_per_iteration:
             prune_iteration += 1
             # print("Ranking filters.. ")
 
@@ -383,7 +397,7 @@ class FilterPruner:
             print("%d / %d Filters remain." % (pruner.total_num_filters(conv_index), number_of_filters))
             # test()
             print("Fine tuning to recover from pruning iteration.")
-            for epoch in range(10):
+            for epoch in range(5):
                 train(optimizer)
             acc = test()
             pass
@@ -394,13 +408,73 @@ class FilterPruner:
             print("acc: ", acc)
             print("acc pre prune: ", acc_pre_prune)
             if acc <= acc_pre_prune * 0.97:
-                pass
+                not_stop = 0
+                print("acc")
+            if prune_layer and prune_iteration >= len(b) - 1:
+                not_stop = 0
+                print("iteration")
+            if pruner.total_num_filters(conv_index) / number_of_filters > 0.1 and not prune_layer:
+                not_stop = 0
+                print("filters")
+
+            if not_stop:
+                num_filters_to_prune_per_iteration = int(b[prune_iteration] - b[prune_iteration + 1])
+                print("filter prune: ", num_filters_to_prune_per_iteration)
 
         print("Finished. Going to fine tune the model a bit more")
         for epoch in range(2):
             train(optimizer)
         test()
         pass
+
+
+class VGG_encode(nn.Module):
+    def __init__(self, vgg_model, partition_index, QF):
+        super(VGG_encode, self).__init__()
+        self.vgg = vgg_model
+        self.partition_index = partition_index
+        self.QF = QF
+        index = 0
+        for layer, (name, module) in enumerate(self.vgg.features._modules.items()):
+            if index <= partition_index:
+                if isinstance(module, torch.nn.modules.Conv2d) or isinstance(module, torch.nn.modules.BatchNorm2d):
+                    module.weight.require_grad = False
+            if isinstance(module, torch.nn.modules.ReLU) or isinstance(module, torch.nn.modules.MaxPool2d) or isinstance(module, torch.nn.modules.AvgPool2d):
+                index += 1
+
+    def forward(self, x):
+        index = 0
+        for layer, (name, module) in enumerate(self.vgg.features._modules.items()):
+            x = module(x)
+            if isinstance(module, torch.nn.modules.ReLU) or isinstance(module, torch.nn.modules.MaxPool2d) or isinstance(module, torch.nn.modules.AvgPool2d):
+                if index == self.partition_index:
+                    features = x
+                    features = features.view(features.size(0)*features.size(2), -1)
+                    features = features.data.numpy()
+                    features = np.round(features*255)
+                    im = Image.fromarray(features)
+                    if im.mode != 'L':
+                        im = im.convert('L')
+                    im.save("temp.jpeg", quality=self.QF)
+                    im_decode = Image.open("temp.jpeg")
+
+                    raw_data_size = x.size(0) * x.size(1) * x.size(2) * x.size(3) *4
+                    encoded_data_size = os.path.getsize("temp.jpeg")
+
+                    decode_array = np.array(im_decode)
+                    decode_array = decode_array/255
+                    decode_va = Variable(torch.from_numpy(decode_array))
+                    decode_va = decode_va.view(x.size()).float()
+                    # print("x:")
+                    # print(x.data.numpy())
+                    # print("decode:")
+                    # print(decode_va.data.numpy())
+                    x.data = decode_va.data
+                index += 1
+
+        out = x.view(x.size(0), -1)
+        out = self.vgg.classifier(out)
+        return out, raw_data_size, encoded_data_size
 
 
 def get_args():
@@ -413,6 +487,7 @@ def get_args():
     parser.add_argument("--prune_layer", dest="prune_layer", action="store_true")
     parser.add_argument("--test_pruned", dest="test_pruned", action="store_true")
     parser.add_argument("--prune_layer_test_accuracy", dest="prune_layer_test_accuracy", action="store_true")
+    parser.add_argument("--test_encode", dest="test_encode", action="store_true")
     args = parser.parse_args()
     return args
 
@@ -477,7 +552,7 @@ if __name__ == '__main__':
             pruner = FilterPruner(net.module if isinstance(net, torch.nn.DataParallel) else net)
             total_filter_num_pre_prune = pruner.total_num_filters(conv_index=-1)
             # prune given layer
-            pruner.prune(conv_index)
+            pruner.prune(conv_index, test_accuracy=False, prune_layer=True)
             acc = test()
             save(acc, conv_index)
             pass
@@ -509,9 +584,84 @@ if __name__ == '__main__':
             pruner = FilterPruner(net.module if isinstance(net, torch.nn.DataParallel) else net)
             total_filter_num_pre_prune = pruner.total_num_filters(conv_index=-1)
             # prune given layer
-            pruner.prune(conv_index, Test_accuracy)
+            pruner.prune(conv_index, Test_accuracy, True)
             pass
 
+
+    elif args.test_encode:
+        use_cuda = 0
+        cfg = pruner.get_cfg()
+        conv_index_max = pruner.get_conv_index_max()
+        data = []
+        last_conv_index = 0
+        test_index = [2, 5, 9, 13, 17]
+        potential_QF = [10, 20, 30, 35, 40, 50, 65, 85, 95]
+
+        for (_, index) in enumerate(test_index):
+            for (QF_index, QF) in enumerate(potential_QF):
+                print('==> Resuming from checkpoint..')
+                assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
+                checkpoint = torch.load('./checkpoint/ckpt.prune')
+                net = checkpoint['net']
+                original_acc = checkpoint['acc']
+                net_encode = VGG_encode(net, index, QF)
+
+                optimizer = torch.optim.SGD(net_encode.parameters(), lr=0.001, momentum=0.9, weight_decay=5e-4)
+                print("Fine tuning to recover from JPEG encoding.")
+                for epoch in range(5):
+                    train_loss = 0
+                    correct = 0
+                    total = 0
+                    for batch_idx, (inputs, targets) in enumerate(trainloader):
+                        if use_cuda:
+                            inputs, targets = inputs.cuda(), targets.cuda()
+                        optimizer.zero_grad()
+                        inputs, targets = Variable(inputs), Variable(targets)
+                        outputs, raw_data_size_batch, encoded_data_size_batch = net_encode(inputs)
+                        loss = criterion(outputs, targets)
+                        loss.backward()
+                        optimizer.step()
+
+                        train_loss += loss.data[0]  # item()
+                        _, predicted = torch.max(outputs.data, 1)
+                        total += targets.size(0)
+                        correct += predicted.eq(targets.data).cpu().sum()
+                    print('Train Loss: %.3f | Acc: %.3f%% (%d/%d)'
+                          % (train_loss / (batch_idx + 1), 100. * correct / total, correct, total))
+
+                test_loss = 0
+                total = 0
+                correct = 0
+                raw_data_size = 0
+                encoded_data_size = 0
+                for batch_idx, (inputs, targets) in enumerate(testloader):
+                    if use_cuda:
+                        inputs, targets = inputs.cuda(), targets.cuda()
+                    inputs, targets = Variable(inputs, volatile=True), Variable(targets)
+                    outputs, raw_data_size_batch, encoded_data_size_batch = net_encode(inputs)
+                    raw_data_size += raw_data_size_batch
+                    encoded_data_size += encoded_data_size_batch
+                    loss = criterion(outputs, targets)
+                    test_loss += loss.data[0]  # loss.item()
+                    _, predicted = torch.max(outputs.data, 1)
+                    total += targets.size(0)
+                    correct += predicted.eq(targets.data).cpu().sum()
+
+                print('Test  Loss: %.3f | Acc: %.3f%% (%d/%d)' % (test_loss / (batch_idx + 1), 100. * correct / total, correct, total))
+                acc = 100. * correct / total
+                print('Encode ratio: %.3f | partition index: %d | QF: %d' %(encoded_data_size/raw_data_size, index, QF))
+
+                encode_data = {
+                    'original acc': original_acc,
+                    'acc': acc,
+                    'partition index': index,
+                    'QF': QF,
+                    'encode ratio': encoded_data_size/raw_data_size
+                }
+                data.append(encode_data)
+
+        with open('./test_encode.json', 'w') as fp:
+            json.dump(data, fp, indent=2)
 
     elif args.test_pruned:
         use_cuda = 0
