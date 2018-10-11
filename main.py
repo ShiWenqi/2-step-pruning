@@ -19,6 +19,9 @@ from model_refactor import *
 from modified_googlenet import *
 from models import modified_resnet18
 from PIL import Image
+import fpzip
+from numcompress import compress, decompress
+
 
 if os.name == 'nt':  # windows
     num_workers = 0
@@ -429,6 +432,7 @@ class FilterPruner:
 
 
 class VGG_encode(nn.Module):
+    # QF = 100 is for png encoding
     def __init__(self, vgg_model, partition_index, QF):
         super(VGG_encode, self).__init__()
         self.vgg = vgg_model
@@ -438,7 +442,9 @@ class VGG_encode(nn.Module):
         for layer, (name, module) in enumerate(self.vgg.features._modules.items()):
             if index <= partition_index:
                 if isinstance(module, torch.nn.modules.Conv2d) or isinstance(module, torch.nn.modules.BatchNorm2d):
-                    module.weight.require_grad = False
+                    module._parameters.requires_grad = False
+                    module.weight.requires_grad = False
+                    module.bias.requires_grad = False
             if isinstance(module, torch.nn.modules.ReLU) or isinstance(module, torch.nn.modules.MaxPool2d) or isinstance(module, torch.nn.modules.AvgPool2d):
                 index += 1
 
@@ -449,22 +455,35 @@ class VGG_encode(nn.Module):
             if isinstance(module, torch.nn.modules.ReLU) or isinstance(module, torch.nn.modules.MaxPool2d) or isinstance(module, torch.nn.modules.AvgPool2d):
                 if index == self.partition_index:
                     features = x
-                    features = features.view(features.size(0)*features.size(2), -1)
-                    features = features.data.numpy()
-                    features = np.round(features*255)
-                    im = Image.fromarray(features)
-                    if im.mode != 'L':
-                        im = im.convert('L')
-                    im.save("temp.jpeg", quality=self.QF)
-                    im_decode = Image.open("temp.jpeg")
+                    if self.QF != 100:
+                        features = features.view(features.size(0) * features.size(2), -1)
+                        features = features.data.numpy()
+                        features = np.round(features*255)
+                        im = Image.fromarray(features)
+                        if im.mode != 'L':
+                            im = im.convert('L')
+                        im.save("temp.jpeg", quality=self.QF)
+                        im_decode = Image.open("temp.jpeg")
+                        print(sys.getsizeof(im_decode))
+                        encoded_data_size = os.path.getsize("temp.jpeg")
+                        print(encoded_data_size)
+                        raw_data_size = x.size(0) * x.size(1) * x.size(2) * x.size(3) * 4
+                        decode_array = np.array(im_decode)
+                        decode_array = decode_array / 255
+                        decode_va = Variable(torch.from_numpy(decode_array))
+                        decode_va = decode_va.view(x.size()).float()
 
-                    raw_data_size = x.size(0) * x.size(1) * x.size(2) * x.size(3) *4
-                    encoded_data_size = os.path.getsize("temp.jpeg")
-
-                    decode_array = np.array(im_decode)
-                    decode_array = decode_array/255
-                    decode_va = Variable(torch.from_numpy(decode_array))
-                    decode_va = decode_va.view(x.size()).float()
+                    else:
+                        features = features.view(features.size(0)*features.size(1)*features.size(2)*features.size(3), -1)
+                        features = torch.squeeze(features)
+                        features = features.data.numpy()
+                        features = features.tolist()
+                        raw_data_size = sys.getsizeof(features)
+                        compressed = compress(features, precision=4)
+                        encoded_data_size = sys.getsizeof(compressed)
+                        decode_va = np.array(decompress(compressed))
+                        decode_va = Variable(torch.from_numpy(decode_va))
+                        decode_va = decode_va.view(x.size()).float()
                     # print("x:")
                     # print(x.data.numpy())
                     # print("decode:")
@@ -587,8 +606,77 @@ if __name__ == '__main__':
             pruner.prune(conv_index, Test_accuracy, True)
             pass
 
-
     elif args.test_encode:
+
+        use_cuda = 0
+        cfg = pruner.get_cfg()
+        conv_index_max = pruner.get_conv_index_max()
+        PNG_data = []
+
+        test_index = [2, 5, 9, 13, 17]
+
+        last_conv_index = 0  # log for checkpoint restoring, nearest conv layer
+        for index in range(len(cfg)):
+            if index in test_index:
+                # prune_layer_test_accuracy
+                for prune_iteration in range(0, 16):
+                    print('===> Resuming from checkpoint..')
+                    assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
+                    if os.path.exists(
+                            './checkpoint/ckpt.prune_layer_' + str(last_conv_index) + '_iteration_' + str(prune_iteration)):
+                        checkpoint = torch.load(
+                            './checkpoint/ckpt.prune_layer_' + str(last_conv_index) + '_iteration_' + str(prune_iteration))
+                        print(
+                            './checkpoint/ckpt.prune_layer_' + str(last_conv_index) + '_iteration_' + str(prune_iteration))
+                        # checkpoint = torch.load('./checkpoint/ckpt.prune')
+                        net = checkpoint['net']
+                        acc = checkpoint['acc']
+                        if use_cuda:
+                            net.cuda()
+                        net_encode = VGG_encode(net, index, 100)
+
+                        test_loss = 0
+                        total = 0
+                        correct = 0
+                        raw_data_size = 0
+                        encoded_data_size = 0
+                        for batch_idx, (inputs, targets) in enumerate(testloader):
+                            if use_cuda:
+                                inputs, targets = inputs.cuda(), targets.cuda()
+                            inputs, targets = Variable(inputs, volatile=True), Variable(targets)
+                            outputs, raw_data_size_batch, encoded_data_size_batch = net_encode(inputs)
+                            raw_data_size += raw_data_size_batch
+                            encoded_data_size += encoded_data_size_batch
+                            loss = criterion(outputs, targets)
+                            test_loss += loss.data[0]  # loss.item()
+                            _, predicted = torch.max(outputs.data, 1)
+                            total += targets.size(0)
+                            correct += predicted.eq(targets.data).cpu().sum()
+
+                        print('Test Loss (PNG): %.3f | Acc: %.3f%% (%d/%d)' % (
+                            test_loss / (batch_idx + 1), 100. * correct / total, correct, total))
+                        acc = 100. * correct / total
+                        print('Encode ratio (PNG): %.3f | partition index: %d | QF: %d' % (
+                        encoded_data_size / raw_data_size, index, 100))
+                        ratio = encoded_data_size / raw_data_size
+
+                        data = {
+                            'acc': acc,
+                            'index': index,
+                            'layer_cfg': cfg[index],
+                            'config': cfg,
+                            'prune_iteration': prune_iteration,
+                            'ratio': ratio
+                        }
+                        PNG_data.append(data)
+
+            if index + 1 < len(cfg):
+                if not isinstance(cfg[index + 1], str):
+                    last_conv_index += 1
+
+        with open('./PNG_encode.json', 'w') as fp:
+            json.dump(PNG_data, fp, indent=2)
+
         use_cuda = 0
         cfg = pruner.get_cfg()
         conv_index_max = pruner.get_conv_index_max()
@@ -606,9 +694,33 @@ if __name__ == '__main__':
                 original_acc = checkpoint['acc']
                 net_encode = VGG_encode(net, index, QF)
 
-                optimizer = torch.optim.SGD(net_encode.parameters(), lr=0.001, momentum=0.9, weight_decay=5e-4)
+                test_loss = 0
+                total = 0
+                correct = 0
+                raw_data_size = 0
+                encoded_data_size = 0
+                for batch_idx, (inputs, targets) in enumerate(testloader):
+                    if use_cuda:
+                        inputs, targets = inputs.cuda(), targets.cuda()
+                    inputs, targets = Variable(inputs, volatile=True), Variable(targets)
+                    outputs, raw_data_size_batch, encoded_data_size_batch = net_encode(inputs)
+                    raw_data_size += raw_data_size_batch
+                    encoded_data_size += encoded_data_size_batch
+                    loss = criterion(outputs, targets)
+                    test_loss += loss.data[0]  # loss.item()
+                    _, predicted = torch.max(outputs.data, 1)
+                    total += targets.size(0)
+                    correct += predicted.eq(targets.data).cpu().sum()
+
+                print('Test Loss before fine tune: %.3f | Acc: %.3f%% (%d/%d)' % (test_loss / (batch_idx + 1), 100. * correct / total, correct, total))
+                acc = 100. * correct / total
+                print('Encode ratio: %.3f | partition index: %d | QF: %d' % (encoded_data_size / raw_data_size, index, QF))
+                ratio = encoded_data_size / raw_data_size
+
+                params = filter(lambda p: p.requires_grad, net_encode.parameters())
+                optimizer = torch.optim.SGD(params, lr=0.001, momentum=0.9, weight_decay=5e-4)
                 print("Fine tuning to recover from JPEG encoding.")
-                for epoch in range(5):
+                for epoch in range(2):
                     train_loss = 0
                     correct = 0
                     total = 0
@@ -647,16 +759,19 @@ if __name__ == '__main__':
                     total += targets.size(0)
                     correct += predicted.eq(targets.data).cpu().sum()
 
-                print('Test  Loss: %.3f | Acc: %.3f%% (%d/%d)' % (test_loss / (batch_idx + 1), 100. * correct / total, correct, total))
-                acc = 100. * correct / total
+                print('Test Loss after fine tune: %.3f | Acc: %.3f%% (%d/%d)' % (test_loss / (batch_idx + 1), 100. * correct / total, correct, total))
+                acc_finetune = 100. * correct / total
                 print('Encode ratio: %.3f | partition index: %d | QF: %d' %(encoded_data_size/raw_data_size, index, QF))
+                ratio_encode = encoded_data_size/raw_data_size
 
                 encode_data = {
                     'original acc': original_acc,
                     'acc': acc,
+                    'acc_finetune': acc_finetune,
                     'partition index': index,
                     'QF': QF,
-                    'encode ratio': encoded_data_size/raw_data_size
+                    'encode ratio': ratio,
+                    'encode ratio finetune': ratio_encode
                 }
                 data.append(encode_data)
 
