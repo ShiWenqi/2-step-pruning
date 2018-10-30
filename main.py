@@ -368,6 +368,8 @@ class FilterPruner:
             num_filters_to_prune_per_iteration = int(b[prune_iteration] - b[prune_iteration+1])
             print("b: ")
             print(b)
+            print("prune iteration: ")
+            print(prune_iteration)
             print("filter prune: ", num_filters_to_prune_per_iteration)
         else:
             num_filters_to_prune_per_iteration = math.ceil(number_of_filters / 16)
@@ -395,13 +397,17 @@ class FilterPruner:
                 # self.model = torch.nn.DataParallel(self.model, device_ids=range(torch.cuda.device_count()))
                 # cudnn.benchmark = True
 
-            optimizer = torch.optim.SGD(self.model.parameters(), lr=0.001, momentum=0.9, weight_decay=5e-4)
-
             print("%d / %d Filters remain." % (pruner.total_num_filters(conv_index), number_of_filters))
             # test()
             print("Fine tuning to recover from pruning iteration.")
+
+            optimizer = torch.optim.SGD(self.model.parameters(), lr=0.001, momentum=0.9, weight_decay=5e-4)
             for epoch in range(5):
                 train(optimizer)
+            optimizer = torch.optim.SGD(self.model.parameters(), lr=0.0001, momentum=0.9, weight_decay=5e-4)
+            for epoch in range(3):
+                train(optimizer)
+
             acc = test()
             pass
 
@@ -410,19 +416,21 @@ class FilterPruner:
 
             print("acc: ", acc)
             print("acc pre prune: ", acc_pre_prune)
-            if acc <= acc_pre_prune * 0.97:
+            if acc <= acc_pre_prune - 2.0 and not test_accuracy:
                 not_stop = 0
                 print("acc")
             if prune_layer and prune_iteration >= len(b) - 1:
                 not_stop = 0
                 print("iteration")
-            if pruner.total_num_filters(conv_index) / number_of_filters > 0.1 and not prune_layer:
+            if prune_layer and pruner.total_num_filters(conv_index) / number_of_filters < 0.001:
                 not_stop = 0
                 print("filters")
 
             if not_stop:
                 num_filters_to_prune_per_iteration = int(b[prune_iteration] - b[prune_iteration + 1])
                 print("filter prune: ", num_filters_to_prune_per_iteration)
+                print("prune iteration: ", prune_iteration)
+                print("b: ", b)
 
         print("Finished. Going to fine tune the model a bit more")
         for epoch in range(2):
@@ -464,9 +472,7 @@ class VGG_encode(nn.Module):
                             im = im.convert('L')
                         im.save("temp.jpeg", quality=self.QF)
                         im_decode = Image.open("temp.jpeg")
-                        print(sys.getsizeof(im_decode))
                         encoded_data_size = os.path.getsize("temp.jpeg")
-                        print(encoded_data_size)
                         raw_data_size = x.size(0) * x.size(1) * x.size(2) * x.size(3) * 4
                         decode_array = np.array(im_decode)
                         decode_array = decode_array / 255
@@ -677,13 +683,14 @@ if __name__ == '__main__':
         with open('./PNG_encode.json', 'w') as fp:
             json.dump(PNG_data, fp, indent=2)
 
+
         use_cuda = 0
         cfg = pruner.get_cfg()
         conv_index_max = pruner.get_conv_index_max()
         data = []
         last_conv_index = 0
         test_index = [2, 5, 9, 13, 17]
-        potential_QF = [10, 20, 30, 35, 40, 50, 65, 85, 95]
+        potential_QF = [5, 10, 20, 30, 40, 50, 65, 80, 95]
 
         for (_, index) in enumerate(test_index):
             for (QF_index, QF) in enumerate(potential_QF):
@@ -778,7 +785,7 @@ if __name__ == '__main__':
         with open('./test_encode.json', 'w') as fp:
             json.dump(data, fp, indent=2)
 
-    elif args.test_pruned:
+    if args.test_pruned:
         use_cuda = 0
         cfg = pruner.get_cfg()
         conv_index_max = pruner.get_conv_index_max()
