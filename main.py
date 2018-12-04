@@ -86,7 +86,7 @@ def train(optimizer=None, rankfilters=False):
         correct += predicted.eq(targets.data).cpu().sum()
 
     print('Train Loss: %.3f | Acc: %.3f%% (%d/%d)'
-          % (train_loss / (batch_idx + 1), 100. * correct / total, correct, total))
+          % (train_loss / (batch_idx + 1), 100. * float(correct) / total, correct, total))
 
 
 # test
@@ -109,8 +109,8 @@ def test(log_index=-1, prune_iteration=-1):
             correct += predicted.eq(targets.data).cpu().sum()
 
         print('Test  Loss: %.3f | Acc: %.3f%% (%d/%d)' % (
-            test_loss / (batch_idx + 1), 100. * correct / total, correct, total))
-        acc = 100. * correct / total
+            test_loss / (batch_idx + 1), 100. * float(correct) / total, correct, total))
+        acc = 100. * float(correct) / total
 
     if log_index != -1:
         (inputs, targets) = list(testloader)[0]
@@ -293,7 +293,7 @@ class FilterPruner:
     def normalize_ranks_per_layer(self):
         for i in self.filter_ranks:
             v = torch.abs(self.filter_ranks[i])
-            v = v / np.sqrt(torch.sum(v * v))
+            v = v / np.sqrt(torch.sum(v * v)).cuda()
             self.filter_ranks[i] = v.cpu()
 
     def get_pruning_plan(self, num_filters_to_prune, conv_index):
@@ -402,10 +402,10 @@ class FilterPruner:
             print("Fine tuning to recover from pruning iteration.")
 
             optimizer = torch.optim.SGD(self.model.parameters(), lr=0.001, momentum=0.9, weight_decay=5e-4)
-            for epoch in range(5):
+            for epoch in range(10):
                 train(optimizer)
             optimizer = torch.optim.SGD(self.model.parameters(), lr=0.0001, momentum=0.9, weight_decay=5e-4)
-            for epoch in range(3):
+            for epoch in range(5):
                 train(optimizer)
 
             acc = test()
@@ -416,7 +416,7 @@ class FilterPruner:
 
             print("acc: ", acc)
             print("acc pre prune: ", acc_pre_prune)
-            if acc <= acc_pre_prune - 2.0 and not test_accuracy:
+            if acc <= acc_pre_prune - 1.8 and not test_accuracy:
                 not_stop = 0
                 print("acc")
             if prune_layer and prune_iteration >= len(b) - 1:
@@ -426,7 +426,7 @@ class FilterPruner:
                 not_stop = 0
                 print("filters")
 
-            if not_stop:
+            if not_stop and not args.prune:
                 num_filters_to_prune_per_iteration = int(b[prune_iteration] - b[prune_iteration + 1])
                 print("filter prune: ", num_filters_to_prune_per_iteration)
                 print("prune iteration: ", prune_iteration)
