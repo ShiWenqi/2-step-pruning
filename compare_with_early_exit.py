@@ -20,6 +20,8 @@ import fpzip
 from numcompress import compress, decompress
 from torch.autograd import Variable
 from torchsummary import summary
+import matplotlib.pyplot as plt
+from pylab import *
 
 
 NUM_CLASSES = 10
@@ -125,19 +127,80 @@ class BranchyAlexNet(nn.Module):
         x = self.fc_3(x)
         return branch_1, branch_2, branch_3, branch_4, x
 
-    def forward_track(self):
-        self.layer_index = {}
-        index = 0
-        for layer, (name, module) in enumerate(self._modules.items()):
-            if isinstance(module, torch.nn.modules.ReLU) \
-                    or isinstance(module, torch.nn.modules.Conv2d) \
-                    or isinstance(module, torch.nn.modules.MaxPool2d) \
-                    or isinstance(module, torch.nn.modules.LocalResponseNorm) \
-                    or isinstance(module, torch.nn.modules.Dropout) \
-                    or isinstance(module, torch.nn.modules.Linear):
-                self.layer_index[index] = layer
-                index += 1
-        return self.layer_index
+    def forward_branch_1(self, x):
+        x = self.conv_1(x)
+        x = self.relu_1(x)
+        x = self.pool_1(x)
+        branch_1 = self.branch_1(x)
+        branch_1 = branch_1.view(branch_1.size(0), 1024)
+        branch_1 = self.branch_1_linear(branch_1)
+        return branch_1
+
+    def forward_branch_2(self, x):
+        x = self.conv_1(x)
+        x = self.relu_1(x)
+        x = self.pool_1(x)
+        x = self.conv_2(x)
+        x = self.relu_2(x)
+        x = self.pool_2(x)
+        branch_2 = self.branch_2(x)
+        branch_2 = branch_2.view(branch_2.size(0), 1024)
+        branch_2 = self.branch_2_linear(branch_2)
+        return branch_2
+
+    def forward_branch_3(self, x):
+        x = self.conv_1(x)
+        x = self.relu_1(x)
+        x = self.pool_1(x)
+        x = self.conv_2(x)
+        x = self.relu_2(x)
+        x = self.pool_2(x)
+        x = self.conv_3(x)
+        x = self.relu_3(x)
+        branch_3 = self.branch_3(x)
+        branch_3 = branch_3.view(branch_3.size(0), 1024)
+        branch_3 = self.branch_3_linear(branch_3)
+        return branch_3
+
+    def forward_branch_4(self, x):
+        x = self.conv_1(x)
+        x = self.relu_1(x)
+        x = self.pool_1(x)
+        x = self.conv_2(x)
+        x = self.relu_2(x)
+        x = self.pool_2(x)
+        x = self.conv_3(x)
+        x = self.relu_3(x)
+        x = self.conv_4(x)
+        x = self.relu_4(x)
+        branch_4 = self.branch_4(x)
+        branch_4 = branch_4.view(branch_4.size(0), 1024)
+        branch_4 = self.branch_4_linear(branch_4)
+        return branch_4
+
+    def forward_branch_5(self, x):
+        x = self.conv_1(x)
+        x = self.relu_1(x)
+        x = self.pool_1(x)
+        x = self.conv_2(x)
+        x = self.relu_2(x)
+        x = self.pool_2(x)
+        x = self.conv_3(x)
+        x = self.relu_3(x)
+        x = self.conv_4(x)
+        x = self.relu_4(x)
+        x = self.conv_5(x)
+        x = self.relu_5(x)
+        x = self.pool_3(x)
+        x = x.view(x.size(0), 1024)
+        x = self.fc_1(x)
+        x = self.relu_6(x)
+        x = self.dropout_1(x)
+        x = self.fc_2(x)
+        x = self.relu_7(x)
+        x = self.dropout_2(x)
+        x = self.fc_3(x)
+        return x
 
 
 def get_args():
@@ -261,11 +324,11 @@ if __name__ == '__main__':
             loss_branch_3 = criterion(outputs_branch_3, targets)
             loss_branch_4 = criterion(outputs_branch_4, targets)
 
-            test_loss += loss.item()
-            test_loss_branch_1 += loss_branch_1.item()
-            test_loss_branch_2 += loss_branch_2.item()
-            test_loss_branch_3 += loss_branch_3.item()
-            test_loss_branch_4 += loss_branch_4.item()
+            test_loss += loss.data[0]
+            test_loss_branch_1 += loss_branch_1.data[0]
+            test_loss_branch_2 += loss_branch_2.data[0]
+            test_loss_branch_3 += loss_branch_3.data[0]
+            test_loss_branch_4 += loss_branch_4.data[0]
 
             _, predicted = torch.max(outputs.data, 1)
             _, predicted_branch_1 = torch.max(outputs_branch_1.data, 1)
@@ -291,14 +354,257 @@ if __name__ == '__main__':
         print('Test  Loss: %.3f | Acc: %.3f%% (%d/%d)' % (
             test_loss_branch_4 / (batch_idx + 1), 100. * float(correct_branch_4) / total, correct_branch_4, total))
 
-        net.cuda()
-        summary(net, (3, 32, 32))
-        net.cpu()
-        layer_index = net.forward_track()
-        print(layer_index)
+        test_samples = 20
+        profile_branch_1 = []
+        profile_branch_2 = []
+        profile_branch_3 = []
+        profile_branch_4 = []
+        profile_branch_5 = []
 
-        (inputs, targets) = list(testloader)[0]
         net.cpu()
-        with torch.autograd.profiler.profile() as prof:
-             net(Variable(inputs))
-        print(prof.function_events)
+
+        for i in range(test_samples):
+            (inputs, targets) = list(testloader)[i]
+            with torch.autograd.profiler.profile() as prof:
+                net.forward_branch_1(Variable(inputs))
+
+            temp_profile_branch_1 = []
+            for item in prof.function_events:
+                if item.name == 'view':
+                    temp_profile_branch_1[-1] += item.cpu_time * 10e-6  # millisecond
+                elif item.name == 'expand':
+                    temp_profile_branch_1[-1] += item.cpu_time * 10e-6
+                elif item.name == 'addmm':
+                    temp_profile_branch_1[-1] += item.cpu_time * 10e-6
+                else:
+                    temp_profile_branch_1.append(item.cpu_time * 10e-6)
+
+            profile_branch_1 = np.sum([temp_profile_branch_1, profile_branch_1], axis = 0)
+
+            with torch.autograd.profiler.profile() as prof:
+                net.forward_branch_2(Variable(inputs))
+
+            temp_profile_branch_2 = []
+            for item in prof.function_events:
+                if item.name == 'view':
+                    temp_profile_branch_2[-1] += item.cpu_time * 10e-6  # millisecond
+                elif item.name == 'expand':
+                    temp_profile_branch_2[-1] += item.cpu_time * 10e-6
+                elif item.name == 'addmm':
+                    temp_profile_branch_2[-1] += item.cpu_time * 10e-6
+                else:
+                    temp_profile_branch_2.append(item.cpu_time * 10e-6)
+
+            profile_branch_2 = np.sum([temp_profile_branch_2, profile_branch_2], axis = 0)
+
+            with torch.autograd.profiler.profile() as prof:
+                net.forward_branch_3(Variable(inputs))
+            temp_profile_branch_3 = []
+            for item in prof.function_events:
+                if item.name == 'view':
+                    temp_profile_branch_3[-1] += item.cpu_time * 10e-6  # millisecond
+                elif item.name == 'expand':
+                    temp_profile_branch_3[-1] += item.cpu_time * 10e-6
+                elif item.name == 'addmm':
+                    temp_profile_branch_3[-1] += item.cpu_time * 10e-6
+                else:
+                    temp_profile_branch_3.append(item.cpu_time * 10e-6)
+
+            profile_branch_3 = np.sum([temp_profile_branch_3, profile_branch_3], axis = 0)
+
+            with torch.autograd.profiler.profile() as prof:
+                net.forward_branch_4(Variable(inputs))
+            temp_profile_branch_4 = []
+            for item in prof.function_events:
+                if item.name == 'view':
+                    temp_profile_branch_4[-1] += item.cpu_time * 10e-6  # millisecond
+                elif item.name == 'expand':
+                    temp_profile_branch_4[-1] += item.cpu_time * 10e-6
+                elif item.name == 'addmm':
+                    temp_profile_branch_4[-1] += item.cpu_time * 10e-6
+                else:
+                    temp_profile_branch_4.append(item.cpu_time * 10e-6)
+
+            profile_branch_4 = np.sum([temp_profile_branch_4, profile_branch_4], axis = 0)
+
+            with torch.autograd.profiler.profile() as prof:
+                net.forward_branch_5(Variable(inputs))
+            temp_profile_branch_5 = []
+            for item in prof.function_events:
+                if item.name == 'view':
+                    temp_profile_branch_5[-1] += item.cpu_time * 10e-6  # millisecond
+                elif item.name == 'expand':
+                    temp_profile_branch_5[-1] += item.cpu_time * 10e-6
+                elif item.name == 'addmm':
+                    temp_profile_branch_5[-1] += item.cpu_time * 10e-6
+                else:
+                    temp_profile_branch_5.append(item.cpu_time * 10e-6)
+
+            profile_branch_5 = np.sum([temp_profile_branch_5, profile_branch_5], axis = 0)
+
+        for j in range(len(profile_branch_1)):
+            profile_branch_1[j] = profile_branch_1[j] / test_samples
+
+        for j in range(len(profile_branch_2)):
+            profile_branch_2[j] = profile_branch_2[j] / test_samples
+
+        for j in range(len(profile_branch_3)):
+            profile_branch_3[j] = profile_branch_3[j] / test_samples
+
+        for j in range(len(profile_branch_1)):
+            profile_branch_4[j] = profile_branch_4[j] / test_samples
+
+        for j in range(len(profile_branch_1)):
+            profile_branch_5[j] = profile_branch_5[j] / test_samples
+
+        print(profile_branch_1)
+        print(profile_branch_2)
+        print(profile_branch_3)
+        print(profile_branch_4)
+        print(profile_branch_5)
+
+        bandwidth_branch_1 = [3*32*32, 32*32*32, 32*32*32, 32*15*15, 96*15*15, 96*15*15, 96*7*7, 64*7*7, 64*7*7, 64*4*4,
+                              64*4*4, 10]
+        bandwidth_branch_2 = [3*32*32, 32*32*32, 32*32*32, 32*15*15, 64*15*15, 64*15*15, 64*7*7, 96*7*7, 96*7*7, 64*7*7,
+                              64*7*7, 64*4*4, 64*4*4, 10]
+        bandwidth_branch_3 = [3*32*32, 32*32*32, 32*32*32, 32*15*15, 64*15*15, 64*15*15, 64*7*7, 96*7*7, 96*7*7, 96*7*7,
+                              96*7*7, 64*7*7, 64*7*7, 64*4*4, 64*4*4, 10]
+        bandwidth_branch_4 = [3*32*32, 32*32*32, 32*32*32, 32*15*15, 64*15*15, 64*15*15, 64*7*7, 96*7*7, 96*7*7, 96*7*7,
+                              96*7*7, 64*7*7, 64*7*7, 64*4*4, 64*4*4, 128, 10]
+        bandwidth_branch_5 = [3*32*32, 32*32*32, 32*32*32, 32*15*15, 64*15*15, 64*15*15, 64*7*7, 96*7*7, 96*7*7, 96*7*7,
+                              96*7*7, 64*7*7, 64*7*7, 64*4*4, 64*4*4, 256, 256, 256, 128, 128, 10]
+
+        print(len(profile_branch_1))
+        print(len(profile_branch_2))
+        print(len(profile_branch_3))
+        print(len(profile_branch_4))
+        print(len(profile_branch_5))
+        print(len(bandwidth_branch_1))
+        print(len(bandwidth_branch_2))
+        print(len(bandwidth_branch_3))
+        print(len(bandwidth_branch_4))
+        print(len(bandwidth_branch_5))
+
+        data = {
+            'acc_branch_1': float(correct_branch_1) / total,
+            'acc_branch_2': float(correct_branch_2) / total,
+            'acc_branch_3': float(correct_branch_3) / total,
+            'acc_branch_4': float(correct_branch_4) / total,
+            'acc_branch_5': float(correct) / total,
+            'profile_branch_1': profile_branch_1,
+            'profile_branch_2': profile_branch_2,
+            'profile_branch_3': profile_branch_3,
+            'profile_branch_4': profile_branch_4,
+            'profile_branch_5': profile_branch_5,
+            'bandwidth_branch_1': bandwidth_branch_1,
+            'bandwidth_branch_2': bandwidth_branch_2,
+            'bandwidth_branch_3': bandwidth_branch_3,
+            'bandwidth_branch_4': bandwidth_branch_4,
+            'bandwidth_branch_5': bandwidth_branch_5,
+        }
+
+        gamma = 4
+        R = 500
+
+
+        def exit_point_search(latency, gamma, R):
+            # latency requirements, computation capability ratio, average transmission rate
+            exit_point = -1
+            branch = -1
+            mini_latency = 10e10
+            for i in range(len(profile_branch_5)):
+                local_compute = sum(profile_branch_5[0:i])
+                local_compute = local_compute * gamma
+                transmission = bandwidth_branch_5[i+1] / R * 4
+                cloud_compute = sum(profile_branch_5[i:-1])
+                if local_compute + transmission + cloud_compute < mini_latency:
+                    exit_point = i
+                    mini_latency = local_compute + transmission + cloud_compute
+            if mini_latency < latency:
+                branch = 5
+                acc = float(correct) / total,
+
+            if branch == -1:
+                mini_latency = 10e10
+                for i in range(len(profile_branch_4)):
+                    local_compute = sum(profile_branch_4[0:i])
+                    local_compute = local_compute * gamma
+                    transmission = bandwidth_branch_4[i + 1] / R * 4
+                    cloud_compute = sum(profile_branch_4[i:-1])
+                    if local_compute + transmission + cloud_compute < mini_latency:
+                        exit_point = i
+                        mini_latency = local_compute + transmission + cloud_compute
+                if mini_latency < latency:
+                    branch = 4
+                    acc = float(correct_branch_4) / total,
+
+            if branch == -1:
+                mini_latency = 10e10
+                for i in range(len(profile_branch_3)):
+                    local_compute = sum(profile_branch_3[0:i])
+                    local_compute = local_compute * gamma
+                    transmission = bandwidth_branch_3[i + 1] / R * 4
+                    cloud_compute = sum(profile_branch_3[i:-1])
+                    if local_compute + transmission + cloud_compute < mini_latency:
+                        exit_point = i
+                        mini_latency = local_compute + transmission + cloud_compute
+                if mini_latency < latency:
+                    branch = 3
+                    acc = float(correct_branch_3) / total,
+
+            if branch == -1:
+                mini_latency = 10e10
+                for i in range(len(profile_branch_2)):
+                    local_compute = sum(profile_branch_2[0:i])
+                    local_compute = local_compute * gamma
+                    transmission = bandwidth_branch_2[i + 1] / R * 4
+                    cloud_compute = sum(profile_branch_2[i:-1])
+                    if local_compute + transmission + cloud_compute < mini_latency:
+                        exit_point = i
+                        mini_latency = local_compute + transmission + cloud_compute
+                if mini_latency < latency:
+                    branch = 2
+                    acc = float(correct_branch_2) / total,
+
+            if branch == -1:
+                mini_latency = 10e10
+                for i in range(len(profile_branch_1)):
+                    local_compute = sum(profile_branch_1[0:i])
+                    local_compute = local_compute * gamma
+                    transmission = bandwidth_branch_1[i + 1] / R * 4
+                    cloud_compute = sum(profile_branch_1[i:-1])
+                    if local_compute + transmission + cloud_compute < mini_latency:
+                        exit_point = i
+                        mini_latency = local_compute + transmission + cloud_compute
+                if mini_latency < latency:
+                    branch = 1
+                    acc = float(correct_branch_1) / total,
+
+            if branch == -1:
+                return (-1, -1, -1, -1)
+            else:
+                return (branch, exit_point, mini_latency, acc[0])
+
+        # branch: exit point, exit_point: partition point
+
+        x = np.linspace(200, 2000, 100)
+        branch = []
+        exit_point = []
+        mini_latency = []
+        acc = []
+        for j in range(len(x)):
+            b, e, m, a = exit_point_search(x[j], gamma, R)
+            branch.append(b)
+            exit_point.append(e)
+            mini_latency.append(m)
+            acc.append(a)
+
+        acc = np.array(acc)
+        print(acc)
+        print(np.array(branch))
+        fig = plt.figure(1)
+        fig.set_size_inches(16, 20)
+        fig.plot(x, acc)
+        fig.show()
+
+
