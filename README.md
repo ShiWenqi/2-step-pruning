@@ -33,10 +33,12 @@ python main.py --prune_layer    # prune layers and save models separately
 ### test 2-step pruning
 ``` lua
 python main.py --prune_layer_test_accuracy    #prune layers until remain 1 filter
+```
 
 ### comparison with feature coding + fine-tuning
 ``` lua
 python main.py --test_encode
+```
 
 ### chart drawing:
 
