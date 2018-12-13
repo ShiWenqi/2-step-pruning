@@ -354,7 +354,8 @@ if __name__ == '__main__':
         print('Test  Loss: %.3f | Acc: %.3f%% (%d/%d)' % (
             test_loss_branch_4 / (batch_idx + 1), 100. * float(correct_branch_4) / total, correct_branch_4, total))
 
-        test_samples = 20
+        test_samples = 1
+
         profile_branch_1 = []
         profile_branch_2 = []
         profile_branch_3 = []
@@ -365,19 +366,20 @@ if __name__ == '__main__':
 
         for i in range(test_samples):
             (inputs, targets) = list(testloader)[i]
+            net.forward_branch_3(Variable(inputs))
             with torch.autograd.profiler.profile() as prof:
                 net.forward_branch_1(Variable(inputs))
 
             temp_profile_branch_1 = []
             for item in prof.function_events:
                 if item.name == 'view':
-                    temp_profile_branch_1[-1] += item.cpu_time * 10e-6  # millisecond
+                    temp_profile_branch_1[-1] += item.cpu_time / np.power(10, 6)  # millisecond
                 elif item.name == 'expand':
-                    temp_profile_branch_1[-1] += item.cpu_time * 10e-6
+                    temp_profile_branch_1[-1] += item.cpu_time / np.power(10, 6)
                 elif item.name == 'addmm':
-                    temp_profile_branch_1[-1] += item.cpu_time * 10e-6
+                    temp_profile_branch_1[-1] += item.cpu_time / np.power(10, 6)
                 else:
-                    temp_profile_branch_1.append(item.cpu_time * 10e-6)
+                    temp_profile_branch_1.append(item.cpu_time / np.power(10, 6))
 
             profile_branch_1 = np.sum([temp_profile_branch_1, profile_branch_1], axis = 0)
 
@@ -387,13 +389,13 @@ if __name__ == '__main__':
             temp_profile_branch_2 = []
             for item in prof.function_events:
                 if item.name == 'view':
-                    temp_profile_branch_2[-1] += item.cpu_time * 10e-6  # millisecond
+                    temp_profile_branch_2[-1] += item.cpu_time / np.power(10, 6)  # millisecond
                 elif item.name == 'expand':
-                    temp_profile_branch_2[-1] += item.cpu_time * 10e-6
+                    temp_profile_branch_2[-1] += item.cpu_time / np.power(10, 6)
                 elif item.name == 'addmm':
-                    temp_profile_branch_2[-1] += item.cpu_time * 10e-6
+                    temp_profile_branch_2[-1] += item.cpu_time / np.power(10, 6)
                 else:
-                    temp_profile_branch_2.append(item.cpu_time * 10e-6)
+                    temp_profile_branch_2.append(item.cpu_time / np.power(10, 6))
 
             profile_branch_2 = np.sum([temp_profile_branch_2, profile_branch_2], axis = 0)
 
@@ -402,13 +404,13 @@ if __name__ == '__main__':
             temp_profile_branch_3 = []
             for item in prof.function_events:
                 if item.name == 'view':
-                    temp_profile_branch_3[-1] += item.cpu_time * 10e-6  # millisecond
+                    temp_profile_branch_3[-1] += item.cpu_time / np.power(10, 6)  # millisecond
                 elif item.name == 'expand':
-                    temp_profile_branch_3[-1] += item.cpu_time * 10e-6
+                    temp_profile_branch_3[-1] += item.cpu_time / np.power(10, 6)
                 elif item.name == 'addmm':
-                    temp_profile_branch_3[-1] += item.cpu_time * 10e-6
+                    temp_profile_branch_3[-1] += item.cpu_time / np.power(10, 6)
                 else:
-                    temp_profile_branch_3.append(item.cpu_time * 10e-6)
+                    temp_profile_branch_3.append(item.cpu_time / np.power(10, 6))
 
             profile_branch_3 = np.sum([temp_profile_branch_3, profile_branch_3], axis = 0)
 
@@ -417,13 +419,13 @@ if __name__ == '__main__':
             temp_profile_branch_4 = []
             for item in prof.function_events:
                 if item.name == 'view':
-                    temp_profile_branch_4[-1] += item.cpu_time * 10e-6  # millisecond
+                    temp_profile_branch_4[-1] += item.cpu_time / np.power(10, 6)  # millisecond
                 elif item.name == 'expand':
-                    temp_profile_branch_4[-1] += item.cpu_time * 10e-6
+                    temp_profile_branch_4[-1] += item.cpu_time / np.power(10, 6)
                 elif item.name == 'addmm':
-                    temp_profile_branch_4[-1] += item.cpu_time * 10e-6
+                    temp_profile_branch_4[-1] += item.cpu_time / np.power(10, 6)
                 else:
-                    temp_profile_branch_4.append(item.cpu_time * 10e-6)
+                    temp_profile_branch_4.append(item.cpu_time / np.power(10, 6))
 
             profile_branch_4 = np.sum([temp_profile_branch_4, profile_branch_4], axis = 0)
 
@@ -432,13 +434,13 @@ if __name__ == '__main__':
             temp_profile_branch_5 = []
             for item in prof.function_events:
                 if item.name == 'view':
-                    temp_profile_branch_5[-1] += item.cpu_time * 10e-6  # millisecond
+                    temp_profile_branch_5[-1] += item.cpu_time / np.power(10, 6)  # millisecond
                 elif item.name == 'expand':
-                    temp_profile_branch_5[-1] += item.cpu_time * 10e-6
+                    temp_profile_branch_5[-1] += item.cpu_time / np.power(10, 6)
                 elif item.name == 'addmm':
-                    temp_profile_branch_5[-1] += item.cpu_time * 10e-6
+                    temp_profile_branch_5[-1] += item.cpu_time / np.power(10, 6)
                 else:
-                    temp_profile_branch_5.append(item.cpu_time * 10e-6)
+                    temp_profile_branch_5.append(item.cpu_time / np.power(10, 6))
 
             profile_branch_5 = np.sum([temp_profile_branch_5, profile_branch_5], axis = 0)
 
@@ -604,7 +606,7 @@ if __name__ == '__main__':
         print(np.array(branch))
         fig = plt.figure(1)
         fig.set_size_inches(16, 20)
-        fig.plot(x, acc)
-        fig.show()
+        plt.plot(x, acc)
+        plt.show()
 
 

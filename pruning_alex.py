@@ -122,21 +122,24 @@ def test(log_index=-1, prune_iteration=-1):
             # print(next(net.parameters()).is_cuda)
         pruner.forward_n_track(Variable(inputs), log_index)
         cfg = pruner.get_cfg()
+        conv_n_pool_to_layer = pruner.conv_n_pool_to_layer
 
         # get log for time/bandwidth
         delta_ts = []
         bandwidths = []
 
+        feature_map_size = [32*32, 15*15, 15*15, 7*7, 7*7, 7*7, 7*7, 4*4]
+
         for i in range(len(cfg)):
             delta_ts.append(
                 sum(item.cpu_time for item in prof.function_events[:pruner.conv_n_pool_to_layer[i]]) /
-                np.power(10, 6) / batch_size)
+                np.power(10, 6))
             if isinstance(cfg[i], int):
                 bandwidths.append(
-                    int(cfg[i] * (inputs.shape[2] * inputs.shape[3]) / np.power(4, cfg[:i + 1].count('M'))))
+                    int(cfg[i] * feature_map_size[i]))
             elif cfg[i] == 'M':
                 bandwidths.append(
-                    int(cfg[i - 1] * (inputs.shape[2] * inputs.shape[3]) / np.power(4, cfg[:i + 1].count('M'))))
+                    int(cfg[i - 1] * feature_map_size[i]))
             elif cfg[i] == 'L':
                 bandwidths.append(int(1))
 
@@ -177,17 +180,17 @@ def save(acc, conv_index=-1, epoch=-1, prune_iteration=-1):
     if not os.path.isdir('checkpoint'):
         os.mkdir('checkpoint')
     if args.prune and prune_iteration != -1:
-        torch.save(state, './checkpoint/ckpt.prune_%d' %(prune_iteration))
+        torch.save(state, './checkpoint/alex_ckpt.prune_%d' %(prune_iteration))
     elif args.prune:
-        torch.save(state, './checkpoint/ckpt.prune')
+        torch.save(state, './checkpoint/alex_ckpt.prune')
     elif prune_iteration != -1:
-        torch.save(state, './checkpoint/ckpt.prune_layer_%d_iteration_%d' % (conv_index, prune_iteration))
+        torch.save(state, './checkpoint/alex_ckpt.prune_layer_%d_iteration_%d' % (conv_index, prune_iteration))
     elif args.prune_layer and conv_index != -1:
-        torch.save(state, './checkpoint/ckpt.prune_layer_%d' % conv_index)
+        torch.save(state, './checkpoint/alex_ckpt.prune_layer_%d' % conv_index)
     elif epoch != -1:
-        torch.save(state, './checkpoint/ckpt.train.epoch_' + str(epoch))
+        torch.save(state, './checkpoint/alex_ckpt.train.epoch_' + str(epoch))
     else:
-        torch.save(state, './checkpoint/ckpt.train')
+        torch.save(state, './checkpoint/alex_ckpt.train')
 
 
     # restore the cuda or cpu model
@@ -416,7 +419,7 @@ class FilterPruner:
 
             print("acc: ", acc)
             print("acc pre prune: ", acc_pre_prune)
-            if acc <= acc_pre_prune - 1.8 and not test_accuracy:
+            if acc <= acc_pre_prune - 1.0 and not test_accuracy:
                 not_stop = 0
                 print("acc")
             if prune_layer and prune_iteration >= len(b) - 1:
@@ -437,6 +440,69 @@ class FilterPruner:
             train(optimizer)
         test()
         pass
+
+
+class VGG_encode(nn.Module):
+    # QF = 100 is for png encoding
+    def __init__(self, vgg_model, partition_index, QF):
+        super(VGG_encode, self).__init__()
+        self.vgg = vgg_model
+        self.partition_index = partition_index
+        self.QF = QF
+        index = 0
+        for layer, (name, module) in enumerate(self.vgg.features._modules.items()):
+            if index <= partition_index:
+                if isinstance(module, torch.nn.modules.Conv2d) or isinstance(module, torch.nn.modules.BatchNorm2d):
+                    module._parameters.requires_grad = False
+                    module.weight.requires_grad = False
+                    module.bias.requires_grad = False
+            if isinstance(module, torch.nn.modules.ReLU) or isinstance(module, torch.nn.modules.MaxPool2d) or isinstance(module, torch.nn.modules.AvgPool2d):
+                index += 1
+
+    def forward(self, x):
+        index = 0
+        for layer, (name, module) in enumerate(self.vgg.features._modules.items()):
+            x = module(x)
+            if isinstance(module, torch.nn.modules.ReLU) or isinstance(module, torch.nn.modules.MaxPool2d) or isinstance(module, torch.nn.modules.AvgPool2d):
+                if index == self.partition_index:
+                    features = x
+                    if self.QF != 100:
+                        features = features.view(features.size(0) * features.size(2), -1)
+                        features = features.data.numpy()
+                        features = np.round(features*255)
+                        im = Image.fromarray(features)
+                        if im.mode != 'L':
+                            im = im.convert('L')
+                        im.save("temp.jpeg", quality=self.QF)
+                        im_decode = Image.open("temp.jpeg")
+                        encoded_data_size = os.path.getsize("temp.jpeg")
+                        raw_data_size = x.size(0) * x.size(1) * x.size(2) * x.size(3) * 4
+                        decode_array = np.array(im_decode)
+                        decode_array = decode_array / 255
+                        decode_va = Variable(torch.from_numpy(decode_array))
+                        decode_va = decode_va.view(x.size()).float()
+
+                    else:
+                        features = features.view(features.size(0)*features.size(1)*features.size(2)*features.size(3), -1)
+                        features = torch.squeeze(features)
+                        features = features.data.numpy()
+                        features = features.tolist()
+                        raw_data_size = sys.getsizeof(features)
+                        compressed = compress(features, precision=4)
+                        encoded_data_size = sys.getsizeof(compressed)
+                        decode_va = np.array(decompress(compressed))
+                        decode_va = Variable(torch.from_numpy(decode_va))
+                        decode_va = decode_va.view(x.size()).float()
+                    # print("x:")
+                    # print(x.data.numpy())
+                    # print("decode:")
+                    # print(decode_va.data.numpy())
+                    x.data = decode_va.data
+                index += 1
+
+        out = x.view(x.size(0), -1)
+        out = self.vgg.classifier(out)
+        return out, raw_data_size, encoded_data_size
 
 
 def get_args():
@@ -461,7 +527,19 @@ if __name__ == '__main__':
     if args.train:
         print('==> Building model..')
         net = AlexNet()
+        # net = VGG('VGG11')
+        # net = ModifiedResNet18Model()
+        # net = PreActResNet18()
+        # net = ModifiedGoogleNet()
+        # net = DenseNet121()
+        # net = ResNeXt29_2x64d()
+        # net = MobileNet()
+        # net = MobileNetV2()
+        # net = DPN92()
+        # net = ShuffleNetG2()
+        # net = SENet18()
     else:
+        # Load checkpoint.
         print('==> Resuming from checkpoint..')
         assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
         checkpoint = torch.load('./checkpoint/alex_ckpt.train')
@@ -471,6 +549,8 @@ if __name__ == '__main__':
 
     if use_cuda:
         net.cuda()
+        # net = torch.nn.DataParallel(net, device_ids=range(torch.cuda.device_count()))
+        # cudnn.benchmark = True
 
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
@@ -489,7 +569,7 @@ if __name__ == '__main__':
         for conv_index in range(conv_index_max):
             print('==> Resuming from checkpoint..')
             assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
-            checkpoint = torch.load('./checkpoint/ckpt.prune')
+            checkpoint = torch.load('./checkpoint/alex_ckpt.prune')
             net = checkpoint['net']
             acc = checkpoint['acc']
             if use_cuda:
@@ -514,14 +594,14 @@ if __name__ == '__main__':
                 pass
         save(acc)
 
-    elif args.prune_layer_test_accuracy:
+    if args.prune_layer_test_accuracy:
         conv_index_max = pruner.get_conv_index_max()
         Test_accuracy = True
         for conv_index in range(conv_index_max):
             print('==> Resuming from checkpoint..')
             assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
             # Can using ckpt.train get better result?
-            checkpoint = torch.load('./checkpoint/ckpt.prune')
+            checkpoint = torch.load('./checkpoint/alex_ckpt.prune')
             net = checkpoint['net']
             acc = checkpoint['acc']
             if use_cuda:
@@ -535,7 +615,7 @@ if __name__ == '__main__':
             pruner.prune(conv_index, Test_accuracy, True)
             pass
 
-    elif args.test_encode:
+    if args.test_encode:
 
         use_cuda = 0
         cfg = pruner.get_cfg()
@@ -722,7 +802,7 @@ if __name__ == '__main__':
             # original
             print('==> Resuming from checkpoint..')
             assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
-            checkpoint = torch.load('./checkpoint/ckpt.train')
+            checkpoint = torch.load('./checkpoint/alex_ckpt.train')
             net = checkpoint['net']
             acc = checkpoint['acc']
             if use_cuda:
@@ -740,7 +820,7 @@ if __name__ == '__main__':
             # prune
             print('==> Resuming from checkpoint..')
             assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
-            checkpoint = torch.load('./checkpoint/ckpt.prune')
+            checkpoint = torch.load('./checkpoint/alex_ckpt.prune')
             net = checkpoint['net']
             acc = checkpoint['acc']
             if use_cuda:
@@ -758,7 +838,7 @@ if __name__ == '__main__':
             # prune_layer
             print('==> Resuming from checkpoint..')
             assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
-            checkpoint = torch.load('./checkpoint/ckpt.prune_layer_' + str(last_conv_index))
+            checkpoint = torch.load('./checkpoint/alex_ckpt.prune_layer_' + str(last_conv_index))
             # checkpoint = torch.load('./checkpoint/ckpt.prune')
             net = checkpoint['net']
             acc = checkpoint['acc']
@@ -778,9 +858,9 @@ if __name__ == '__main__':
             for prune_iteration in range(0, 16):
                 print('===> Resuming from checkpoint..')
                 assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
-                if os.path.exists('./checkpoint/ckpt.prune_layer_' + str(last_conv_index) + '_iteration_' + str(prune_iteration)):
-                    checkpoint = torch.load('./checkpoint/ckpt.prune_layer_' + str(last_conv_index) + '_iteration_' + str(prune_iteration))
-                    print('./checkpoint/ckpt.prune_layer_' + str(last_conv_index) + '_iteration_' + str(prune_iteration))
+                if os.path.exists('./checkpoint/alex_ckpt.prune_layer_' + str(last_conv_index) + '_iteration_' + str(prune_iteration)):
+                    checkpoint = torch.load('./checkpoint/alex_ckpt.prune_layer_' + str(last_conv_index) + '_iteration_' + str(prune_iteration))
+                    print('./checkpoint/alex_ckpt.prune_layer_' + str(last_conv_index) + '_iteration_' + str(prune_iteration))
                     # checkpoint = torch.load('./checkpoint/ckpt.prune')
                     net = checkpoint['net']
                     acc = checkpoint['acc']
@@ -797,13 +877,13 @@ if __name__ == '__main__':
                 if not isinstance(cfg[index + 1], str):
                     last_conv_index += 1
 
-        with open('./log_original.json', 'w') as fp:
+        with open('./alex_log_original.json', 'w') as fp:
                         json.dump(original_data, fp, indent=2)
-        with open('./log_prune.json', 'w') as fp:
+        with open('./alex_log_prune.json', 'w') as fp:
                         json.dump(prune_data, fp, indent=2)
-        with open('./log_prune_layer.json', 'w') as fp:
+        with open('./alex_log_prune_layer.json', 'w') as fp:
                         json.dump(prune_layer_data, fp, indent=2)
-        with open('./log_prune_layer_test_accuracy.json', 'w') as fp:
+        with open('./alex_log_prune_layer_test_accuracy.json', 'w') as fp:
             json.dump(prune_layer_test_accuracy_data, fp, indent=2)
 
 
