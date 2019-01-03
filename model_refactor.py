@@ -99,14 +99,12 @@ def prune_conv_layer(model, layer_index, filter_index):
         except ValueError:
             pass
 
-
     if batchnorm is not None:
         features = torch.nn.Sequential(
             *(replace_layers(model.features, i, [layer_index + 1],
                          [new_batchnorm]) for i, _ in enumerate(model.features)))
         del model.features
         model.features = features
-
 
     if next_conv is not None:
         features = torch.nn.Sequential(

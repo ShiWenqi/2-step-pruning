@@ -505,8 +505,8 @@ if __name__ == '__main__':
             'bandwidth_branch_5': bandwidth_branch_5,
         }
 
-        gamma = 4
-        R = 500
+        gamma = 5.
+        R = 500./8
 
 
         def exit_point_search(latency, gamma, R):
@@ -517,7 +517,7 @@ if __name__ == '__main__':
             for i in range(len(profile_branch_5)):
                 local_compute = sum(profile_branch_5[0:i])
                 local_compute = local_compute * gamma
-                transmission = bandwidth_branch_5[i+1] / R * 4
+                transmission = bandwidth_branch_5[i] / R * 4
                 cloud_compute = sum(profile_branch_5[i:-1])
                 if local_compute + transmission + cloud_compute < mini_latency:
                     exit_point = i
@@ -531,7 +531,7 @@ if __name__ == '__main__':
                 for i in range(len(profile_branch_4)):
                     local_compute = sum(profile_branch_4[0:i])
                     local_compute = local_compute * gamma
-                    transmission = bandwidth_branch_4[i + 1] / R * 4
+                    transmission = bandwidth_branch_4[i] / R * 4
                     cloud_compute = sum(profile_branch_4[i:-1])
                     if local_compute + transmission + cloud_compute < mini_latency:
                         exit_point = i
@@ -545,7 +545,7 @@ if __name__ == '__main__':
                 for i in range(len(profile_branch_3)):
                     local_compute = sum(profile_branch_3[0:i])
                     local_compute = local_compute * gamma
-                    transmission = bandwidth_branch_3[i + 1] / R * 4
+                    transmission = bandwidth_branch_3[i] / R * 4
                     cloud_compute = sum(profile_branch_3[i:-1])
                     if local_compute + transmission + cloud_compute < mini_latency:
                         exit_point = i
@@ -559,7 +559,7 @@ if __name__ == '__main__':
                 for i in range(len(profile_branch_2)):
                     local_compute = sum(profile_branch_2[0:i])
                     local_compute = local_compute * gamma
-                    transmission = bandwidth_branch_2[i + 1] / R * 4
+                    transmission = bandwidth_branch_2[i] / R * 4
                     cloud_compute = sum(profile_branch_2[i:-1])
                     if local_compute + transmission + cloud_compute < mini_latency:
                         exit_point = i
@@ -573,7 +573,7 @@ if __name__ == '__main__':
                 for i in range(len(profile_branch_1)):
                     local_compute = sum(profile_branch_1[0:i])
                     local_compute = local_compute * gamma
-                    transmission = bandwidth_branch_1[i + 1] / R * 4
+                    transmission = bandwidth_branch_1[i] / R * 4
                     cloud_compute = sum(profile_branch_1[i:-1])
                     if local_compute + transmission + cloud_compute < mini_latency:
                         exit_point = i

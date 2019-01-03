@@ -402,7 +402,7 @@ class FilterPruner:
             print("Fine tuning to recover from pruning iteration.")
 
             optimizer = torch.optim.SGD(self.model.parameters(), lr=0.001, momentum=0.9, weight_decay=5e-4)
-            for epoch in range(10):
+            for epoch in range(8):
                 train(optimizer)
             optimizer = torch.optim.SGD(self.model.parameters(), lr=0.0001, momentum=0.9, weight_decay=5e-4)
             for epoch in range(5):
@@ -433,7 +433,7 @@ class FilterPruner:
                 print("b: ", b)
 
         print("Finished. Going to fine tune the model a bit more")
-        for epoch in range(2):
+        for epoch in range(3):
             train(optimizer)
         test()
         pass

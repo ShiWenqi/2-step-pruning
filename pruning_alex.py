@@ -405,7 +405,7 @@ class FilterPruner:
             print("Fine tuning to recover from pruning iteration.")
 
             optimizer = torch.optim.SGD(self.model.parameters(), lr=0.001, momentum=0.9, weight_decay=5e-4)
-            for epoch in range(10):
+            for epoch in range(8):
                 train(optimizer)
             optimizer = torch.optim.SGD(self.model.parameters(), lr=0.0001, momentum=0.9, weight_decay=5e-4)
             for epoch in range(5):
@@ -419,7 +419,7 @@ class FilterPruner:
 
             print("acc: ", acc)
             print("acc pre prune: ", acc_pre_prune)
-            if acc <= acc_pre_prune - 1.0 and not test_accuracy:
+            if acc <= acc_pre_prune - 1.8 and not test_accuracy:
                 not_stop = 0
                 print("acc")
             if prune_layer and prune_iteration >= len(b) - 1:
@@ -436,7 +436,7 @@ class FilterPruner:
                 print("b: ", b)
 
         print("Finished. Going to fine tune the model a bit more")
-        for epoch in range(2):
+        for epoch in range(5):
             train(optimizer)
         test()
         pass
@@ -505,6 +505,182 @@ class VGG_encode(nn.Module):
         return out, raw_data_size, encoded_data_size
 
 
+class BranchyAlexNet(nn.Module):
+    def __init__(self):
+        super(BranchyAlexNet, self).__init__()
+        self.conv_1 = nn.Conv2d(3, 32, kernel_size=5, stride=1, padding=2)
+        self.relu_1 = nn.ReLU(inplace=True)
+        self.pool_1 = nn.MaxPool2d(kernel_size=3, stride=2)
+        self.conv_2 = nn.Conv2d(32, 64, kernel_size=5, stride=1, padding=2)
+        self.relu_2 = nn.ReLU(inplace=True)
+        self.pool_2 = nn.MaxPool2d(kernel_size=3, stride=2)
+        self.conv_3 = nn.Conv2d(64, 96, kernel_size=3, stride=1, padding=1)
+        self.relu_3 = nn.ReLU(inplace=True)
+        self.conv_4 = nn.Conv2d(96, 96, kernel_size=3, stride=1, padding=1)
+        self.relu_4 = nn.ReLU(inplace=True)
+        self.conv_5 = nn.Conv2d(96, 64, kernel_size=3, stride=1, padding=1)
+        self.relu_5 = nn.ReLU(inplace=True)
+        self.pool_3 = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.fc_1 = nn.Linear(1024, 256)
+        self.relu_6 = nn.ReLU(inplace=True)
+        self.dropout_1 = nn.Dropout()
+        self.fc_2 = nn.Linear(256, 128)
+        self.relu_7 = nn.ReLU(inplace=True)
+        self.dropout_2 = nn.Dropout()
+        self.fc_3 = nn.Linear(128, 10)
+
+        self.branch_1 = nn.Sequential(
+            nn.Conv2d(32, 96, kernel_size=5, padding=2, stride=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2),
+            nn.Conv2d(96, 64, kernel_size=3, padding=1, stride=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2, padding=1))
+        self.branch_1_linear = nn.Sequential(
+            nn.Dropout(),
+            nn.Linear(1024, 10))
+
+        self.branch_2 = nn.Sequential(
+            nn.Conv2d(64, 96, kernel_size=3, padding=1, stride=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(96, 64, kernel_size=3, padding=1, stride=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2, padding=1))
+        self.branch_2_linear = nn.Sequential(
+            nn.Dropout(),
+            nn.Linear(1024, 10))
+
+        self.branch_3 = nn.Sequential(
+            nn.Conv2d(96, 96, kernel_size=3, padding=1, stride=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(96, 64, kernel_size=3, padding=1, stride=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2, padding=1))
+        self.branch_3_linear = nn.Sequential(
+            nn.Dropout(),
+            nn.Linear(1024, 10))
+
+        self.branch_4 = nn.Sequential(
+            nn.Conv2d(96, 64, kernel_size=3, padding=1, stride=1),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2, padding=1))
+        self.branch_4_linear = nn.Sequential(
+            nn.Dropout(),
+            nn.Linear(1024, 128),
+            nn.Linear(128, 10))
+
+    def forward(self, x):
+        x = self.conv_1(x)
+        x = self.relu_1(x)
+        x = self.pool_1(x)
+        branch_1 = self.branch_1(x)
+        branch_1 = branch_1.view(branch_1.size(0), 1024)
+        branch_1 = self.branch_1_linear(branch_1)
+        x = self.conv_2(x)
+        x = self.relu_2(x)
+        x = self.pool_2(x)
+        branch_2 = self.branch_2(x)
+        branch_2 = branch_2.view(branch_2.size(0), 1024)
+        branch_2 = self.branch_2_linear(branch_2)
+        x = self.conv_3(x)
+        x = self.relu_3(x)
+        branch_3 = self.branch_3(x)
+        branch_3 = branch_3.view(branch_3.size(0), 1024)
+        branch_3 = self.branch_3_linear(branch_3)
+        x = self.conv_4(x)
+        x = self.relu_4(x)
+        branch_4 = self.branch_4(x)
+        branch_4 = branch_4.view(branch_4.size(0), 1024)
+        branch_4 = self.branch_4_linear(branch_4)
+        x = self.conv_5(x)
+        x = self.relu_5(x)
+        x = self.pool_3(x)
+        x = x.view(x.size(0), 1024)
+        x = self.fc_1(x)
+        x = self.relu_6(x)
+        x = self.dropout_1(x)
+        x = self.fc_2(x)
+        x = self.relu_7(x)
+        x = self.dropout_2(x)
+        x = self.fc_3(x)
+        return branch_1, branch_2, branch_3, branch_4, x
+
+    def forward_branch_1(self, x):
+        x = self.conv_1(x)
+        x = self.relu_1(x)
+        x = self.pool_1(x)
+        branch_1 = self.branch_1(x)
+        branch_1 = branch_1.view(branch_1.size(0), 1024)
+        branch_1 = self.branch_1_linear(branch_1)
+        return branch_1
+
+    def forward_branch_2(self, x):
+        x = self.conv_1(x)
+        x = self.relu_1(x)
+        x = self.pool_1(x)
+        x = self.conv_2(x)
+        x = self.relu_2(x)
+        x = self.pool_2(x)
+        branch_2 = self.branch_2(x)
+        branch_2 = branch_2.view(branch_2.size(0), 1024)
+        branch_2 = self.branch_2_linear(branch_2)
+        return branch_2
+
+    def forward_branch_3(self, x):
+        x = self.conv_1(x)
+        x = self.relu_1(x)
+        x = self.pool_1(x)
+        x = self.conv_2(x)
+        x = self.relu_2(x)
+        x = self.pool_2(x)
+        x = self.conv_3(x)
+        x = self.relu_3(x)
+        branch_3 = self.branch_3(x)
+        branch_3 = branch_3.view(branch_3.size(0), 1024)
+        branch_3 = self.branch_3_linear(branch_3)
+        return branch_3
+
+    def forward_branch_4(self, x):
+        x = self.conv_1(x)
+        x = self.relu_1(x)
+        x = self.pool_1(x)
+        x = self.conv_2(x)
+        x = self.relu_2(x)
+        x = self.pool_2(x)
+        x = self.conv_3(x)
+        x = self.relu_3(x)
+        x = self.conv_4(x)
+        x = self.relu_4(x)
+        branch_4 = self.branch_4(x)
+        branch_4 = branch_4.view(branch_4.size(0), 1024)
+        branch_4 = self.branch_4_linear(branch_4)
+        return branch_4
+
+    def forward_branch_5(self, x):
+        x = self.conv_1(x)
+        x = self.relu_1(x)
+        x = self.pool_1(x)
+        x = self.conv_2(x)
+        x = self.relu_2(x)
+        x = self.pool_2(x)
+        x = self.conv_3(x)
+        x = self.relu_3(x)
+        x = self.conv_4(x)
+        x = self.relu_4(x)
+        x = self.conv_5(x)
+        x = self.relu_5(x)
+        x = self.pool_3(x)
+        x = x.view(x.size(0), 1024)
+        x = self.fc_1(x)
+        x = self.relu_6(x)
+        x = self.dropout_1(x)
+        x = self.fc_2(x)
+        x = self.relu_7(x)
+        x = self.dropout_2(x)
+        x = self.fc_3(x)
+        return x
+
+
 def get_args():
     parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
     parser.add_argument('--lr', default=0.001, type=float, help='learning rate')
@@ -516,6 +692,7 @@ def get_args():
     parser.add_argument("--test_pruned", dest="test_pruned", action="store_true")
     parser.add_argument("--prune_layer_test_accuracy", dest="prune_layer_test_accuracy", action="store_true")
     parser.add_argument("--test_encode", dest="test_encode", action="store_true")
+    parser.add_argument("--load", dest="load", action="store_true")
     args = parser.parse_args()
     return args
 
@@ -557,6 +734,36 @@ if __name__ == '__main__':
 
     pruner = FilterPruner(net.module if isinstance(net, torch.nn.DataParallel) else net)
     total_filter_num_pre_prune = pruner.total_num_filters(conv_index=-1)
+
+    if args.load:
+        branchynet = torch.load('./checkpoint/ckpt.train.alexnet')
+        net = AlexNet()
+        net.features = nn.Sequential(
+            branchynet.conv_1,
+            branchynet.relu_1,
+            branchynet.pool_1,
+            branchynet.conv_2,
+            branchynet.relu_2,
+            branchynet.pool_2,
+            branchynet.conv_3,
+            branchynet.relu_3,
+            branchynet.conv_4,
+            branchynet.relu_4,
+            branchynet.conv_5,
+            branchynet.relu_5,
+            branchynet.pool_3
+        )
+        net.classifier = nn.Sequential(
+            branchynet.fc_1,
+            branchynet.relu_6,
+            branchynet.dropout_1,
+            branchynet.fc_2,
+            branchynet.relu_7,
+            branchynet.dropout_2,
+            branchynet.fc_3
+        )
+        acc = test()
+        save(acc)
 
     if args.prune:
         pruner.prune(-1, False)
